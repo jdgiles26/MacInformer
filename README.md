@@ -172,5 +172,4 @@ export ANTHROPIC_API_KEY=sk-ant-…
 
 ## License
 
-MIT. Not affiliated with winsiderss; "System Informer" names the upstream project this
-ports. macOS, Mac mini and Apple Silicon are trademarks of Apple Inc.
+MIT — same as System Informer.
