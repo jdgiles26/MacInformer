@@ -1,0 +1,9 @@
+[package]
+name = "macinformer-tui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Hand-rolled ANSI terminal UI replicating the System Informer main window"
+
+[dependencies]
+macinformer-core = { path = "../macinformer-core" }

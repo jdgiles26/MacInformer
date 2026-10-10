@@ -1,0 +1,13 @@
+[package]
+name = "macinformer-menubar"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "macOS menu-bar GUI shell for MacInformer (direct Cocoa FFI, zero deps)"
+
+[[bin]]
+name = "macinformer-menubar"
+path = "src/main.rs"
+
+[dependencies]
+macinformer-core = { path = "../macinformer-core" }
