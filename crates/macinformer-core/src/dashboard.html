@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>MacInformer — Live</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background:#0c0d10; color:#e8e9ec; font:14px/1.45 -apple-system,"SF Pro Text",system-ui,sans-serif; padding:12px; max-width:960px; margin:0 auto; }
+  header { display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:4px; margin-bottom:12px; }
+  h1 { font-size:17px; font-weight:700; letter-spacing:.3px; }
+  h1 .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#e5484d; margin-right:7px; transition:background .3s; }
+  h1 .dot.on { background:#30a46c; }
+  #sub { color:#8b8d94; font-size:12px; }
+  #aibtn { background:#1d2536; border:1px solid #35507e; color:#a8c7fa; border-radius:9px; padding:4px 12px; font-size:12.5px; cursor:pointer; }
+  #aibtn.off { opacity:.45; cursor:default; }
+  #alertbar { display:none; background:#3d1416; border:1px solid #e5484d55; color:#ffb4ab; border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:13px; }
+  #alertbar.show { display:block; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px; }
+  .card { background:#15171c; border:1px solid #26282f; border-radius:14px; padding:12px 14px; }
+  .card .label { color:#8b8d94; font-size:11px; text-transform:uppercase; letter-spacing:.8px; }
+  .card .value { font-size:24px; font-weight:700; font-variant-numeric:tabular-nums; margin-top:2px; }
+  .card .hint { color:#6b6d74; font-size:11px; margin-top:2px; min-height:14px; }
+  .bar { height:4px; background:#26282f; border-radius:2px; margin-top:8px; overflow:hidden; }
+  .bar > div { height:100%; border-radius:2px; background:#4c8dff; transition:width .6s ease; }
+  .card.hot .bar > div { background:#e5484d; }
+  section { background:#15171c; border:1px solid #26282f; border-radius:14px; padding:12px 14px; margin-bottom:14px; }
+  section.flash { border-color:#4c8dff; }
+  h2 { font-size:13px; font-weight:600; color:#b9bbc2; margin-bottom:8px; letter-spacing:.3px; }
+  h2 .note { float:right; color:#6b6d74; font-weight:400; font-size:11px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; font-variant-numeric:tabular-nums; }
+  th { text-align:left; color:#6b6d74; font-weight:500; font-size:11px; padding:3px 6px 6px 0; border-bottom:1px solid #26282f; }
+  th.r, td.r { text-align:right; }
+  td { padding:5px 6px 5px 0; border-bottom:1px solid #1d1f25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px; }
+  tr:last-child td { border-bottom:none; }
+  .scroll { overflow-x:auto; }
+  .muted { color:#6b6d74; }
+  .up { color:#30a46c; } .down { color:#e5484d; }
+  footer { color:#55575e; font-size:11px; text-align:center; padding:6px 0 20px; }
+  /* ---- AI chat drawer ---- */
+  #drawer { position:fixed; top:0; right:0; bottom:0; width:min(420px,92vw); background:#101218; border-left:1px solid #2a2d36; display:flex; flex-direction:column; transform:translateX(105%); transition:transform .25s ease; z-index:10; box-shadow:-12px 0 40px #0009; }
+  #drawer.open { transform:none; }
+  #drawer .dhead { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid #23262e; }
+  #drawer .dhead b { font-size:13px; color:#a8c7fa; }
+  #drawer .dhead button { background:none; border:none; color:#8b8d94; font-size:16px; cursor:pointer; }
+  #chatlog { flex:1; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
+  .msg { border-radius:12px; padding:9px 12px; font-size:13px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .msg.you { background:#1d2536; align-self:flex-end; max-width:88%; }
+  .msg.ai { background:#171a21; border:1px solid #26282f; align-self:flex-start; max-width:95%; }
+  .msg.err { background:#3d1416; color:#ffb4ab; align-self:flex-start; max-width:95%; font-size:12px; }
+  .msg.act { background:none; color:#7dd87d; font-size:11.5px; padding:2px 12px; }
+  #drawer .dinput { display:flex; gap:8px; padding:12px 14px; border-top:1px solid #23262e; }
+  #chatq { flex:1; background:#0c0d10; border:1px solid #2a2d36; border-radius:10px; color:#e8e9ec; padding:9px 12px; font-size:13.5px; outline:none; }
+  #chatq:focus { border-color:#4c8dff; }
+  #sendbtn { background:#4c8dff; border:none; color:#fff; border-radius:10px; padding:0 16px; font-size:13px; cursor:pointer; }
+  #sendbtn:disabled { opacity:.4; cursor:default; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot" id="dot"></span>MacInformer</h1>
+  <button id="aibtn" onclick="toggleDrawer()">✦ AI assistant</button>
+  <div id="sub">connecting…</div>
+</header>
+<div id="alertbar"></div>
+
+<div class="cards">
+  <div class="card" id="c-cpu"><div class="label">CPU</div><div class="value" id="cpu">–</div><div class="bar"><div id="cpu-bar"></div></div><div class="hint" id="cpu-hint"></div></div>
+  <div class="card" id="c-mem"><div class="label">Memory</div><div class="value" id="mem">–</div><div class="bar"><div id="mem-bar"></div></div><div class="hint" id="mem-hint"></div></div>
+  <div class="card" id="c-gpu"><div class="label">GPU</div><div class="value" id="gpu">–</div><div class="bar"><div id="gpu-bar"></div></div><div class="hint" id="gpu-hint"></div></div>
+  <div class="card"><div class="label">Temperature</div><div class="value" id="temp">–</div><div class="hint" id="temp-hint"></div></div>
+  <div class="card"><div class="label">Battery</div><div class="value" id="bat">–</div><div class="hint" id="bat-hint"></div></div>
+  <div class="card"><div class="label">Network</div><div class="value" id="net">–</div><div class="hint" id="net-hint"></div></div>
+</div>
+
+<section id="s-bw">
+  <h2>Per-app bandwidth <span class="note" id="bw-note"></span></h2>
+  <div class="scroll"><table id="bw"><thead><tr><th>Process</th><th class="r">PID</th><th class="r">↓ recv/s</th><th class="r">↑ sent/s</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section id="s-procs">
+  <h2>Top processes <span class="note" id="proc-note"></span></h2>
+  <div class="scroll"><table id="procs"><thead><tr><th>Name</th><th class="r">PID</th><th class="r">CPU %</th><th class="r">Memory</th><th class="r">Threads</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section id="s-conns">
+  <h2>Connections <span class="note" id="conn-note"></span></h2>
+  <div class="scroll"><table id="conns"><thead><tr><th>Process</th><th>Proto</th><th>Local</th><th>Remote</th><th>State</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<footer>macinformer --server · live over WebSocket · <span id="tick"></span></footer>
+
+<div id="drawer">
+  <div class="dhead"><b id="chatitle">AI assistant</b><button onclick="toggleDrawer()" aria-label="close">✕</button></div>
+  <div id="chatlog"></div>
+  <div class="dinput">
+    <input id="chatq" placeholder="Ask about this Mac…" autocomplete="off" onkeydown="if(event.key==='Enter')sendChat()">
+    <button id="sendbtn" onclick="sendChat()">Send</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var dot = document.getElementById('dot'), sub = document.getElementById('sub');
+  var lastData = null, filters = { processes: '', connections: '', bandwidth: '' };
+  function q(id) { return document.getElementById(id); }
+  function tok() { var m = location.search.match(/[?&]token=([^&]+)/); return m ? '?token=' + m[1] : ''; }
+  function fmtB(n) { if (n < 1024) return n + ' B'; var u = ['kB','MB','GB','TB']; var i = -1; do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1); return (n >= 100 ? n.toFixed(0) : n.toFixed(1)) + ' ' + u[i]; }
+  function fmtR(bps) { return bps < 1 ? '0' : fmtB(bps) + '/s'; }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function rows(sel, html) { document.querySelector(sel + ' tbody').innerHTML = html; }
+  function match(s, f) { return !f || String(s).toLowerCase().indexOf(f.toLowerCase()) !== -1; }
+
+  function render(d) {
+    lastData = d;
+    q('cpu').textContent = d.cpu.total.toFixed(1) + '%';
+    q('cpu-bar').style.width = Math.min(100, d.cpu.total) + '%';
+    q('c-cpu').className = 'card' + (d.cpu.total >= 90 ? ' hot' : '');
+    q('cpu-hint').textContent = d.cpu.brand || '';
+    var mp = d.memory.total ? d.memory.used / d.memory.total * 100 : 0;
+    q('mem').textContent = fmtB(d.memory.used);
+    q('mem-bar').style.width = mp + '%';
+    q('c-mem').className = 'card' + (mp >= 90 ? ' hot' : '');
+    q('mem-hint').textContent = 'of ' + fmtB(d.memory.total) + (d.memory.swap_used ? ' · swap ' + fmtB(d.memory.swap_used) : '');
+    if (d.gpu) { q('gpu').textContent = d.gpu.util.toFixed(1) + '%'; q('gpu-bar').style.width = Math.min(100, d.gpu.util) + '%';
+      q('gpu-hint').textContent = (d.gpu.watts != null ? d.gpu.watts.toFixed(2) + ' W' : ''); }
+    else { q('gpu').textContent = 'n/a'; q('gpu-hint').textContent = ''; }
+    var s = d.sensors || {};
+    q('temp').textContent = s.cpu_temp != null ? s.cpu_temp.toFixed(1) + ' °C' : '–';
+    var th = [];
+    if (s.gpu_temp != null) th.push('GPU ' + s.gpu_temp.toFixed(1) + '°');
+    if (s.ssd_temp != null) th.push('SSD ' + s.ssd_temp.toFixed(1) + '°');
+    if (s.fan_rpm != null) th.push(Math.round(s.fan_rpm) + ' rpm');
+    q('temp-hint').textContent = th.join(' · ');
+    var b = s.battery || { present: false };
+    if (b.present) {
+      q('bat').textContent = Math.round(b.percent) + '%';
+      var bh = b.charging ? 'charging' : (b.on_ac ? 'on AC' : 'discharging');
+      if (b.minutes != null) bh += ' · ' + Math.floor(b.minutes / 60) + ':' + ('0' + b.minutes % 60).slice(-2) + (b.charging ? ' to full' : ' left');
+      q('bat-hint').textContent = bh;
+    } else { q('bat').textContent = '—'; q('bat-hint').textContent = 'no battery'; }
+    var rx = 0, tx = 0;
+    (d.networks || []).forEach(function (n) { if (n.up) { rx += n.rx_bps; tx += n.tx_bps; } });
+    q('net').textContent = fmtR(rx + tx);
+    q('net-hint').textContent = '↓ ' + fmtR(rx) + '  ↑ ' + fmtR(tx);
+
+    var fbw = filters.bandwidth;
+    var bw = (d.bandwidth || []).filter(function (p) { return match(p.name, fbw); });
+    q('bw-note').textContent = (fbw ? 'filter: "' + fbw + '" · ' : '') + ((d.bandwidth || []).length ? 'approximate, via nettop' : (d.bandwidth_note || 'unavailable'));
+    rows('#bw', bw.slice(0, 12).filter(function (p) { return p.rx_bps + p.tx_bps > 0.5; }).map(function (p) {
+      return '<tr><td>' + esc(p.name) + '</td><td class="r">' + p.pid + '</td><td class="r down">' + fmtR(p.rx_bps) + '</td><td class="r up">' + fmtR(p.tx_bps) + '</td></tr>';
+    }).join('') || '<tr><td colspan="4" class="muted">no active flows</td></tr>');
+
+    var fp = filters.processes;
+    var ps = (d.processes || []).filter(function (p) { return match(p.name, fp); }).sort(function (a, b) { return b.cpu - a.cpu; });
+    q('proc-note').textContent = (fp ? 'filter: "' + fp + '" · ' : '') + d.processes_total + ' processes · ' + d.threads_total + ' threads';
+    rows('#procs', ps.slice(0, 15).map(function (p) {
+      return '<tr><td>' + esc(p.name) + '</td><td class="r">' + p.pid + '</td><td class="r">' + p.cpu.toFixed(1) + '</td><td class="r">' + fmtB(p.mem) + '</td><td class="r">' + p.threads + '</td></tr>';
+    }).join('') || '<tr><td colspan="5" class="muted">no match</td></tr>');
+
+    var fc = filters.connections;
+    var cs = (d.connections || []).filter(function (c) { return c.state !== 'Listen' && (match(c.process, fc) || match(c.remote, fc)); });
+    q('conn-note').textContent = (fc ? 'filter: "' + fc + '" · ' : '') + cs.length + ' active · ' + (d.connections || []).length + ' total';
+    rows('#conns', cs.slice(0, 15).map(function (c) {
+      return '<tr><td>' + esc(c.process) + '</td><td>' + c.proto + '</td><td>' + esc(c.local) + ':' + c.lport + '</td><td>' + esc(c.remote) + ':' + c.rport + '</td><td>' + esc(c.state) + '</td></tr>';
+    }).join('') || '<tr><td colspan="5" class="muted">no active connections</td></tr>');
+
+    var ab = q('alertbar');
+    if (d.alerts && d.alerts.length) { ab.className = 'show'; ab.innerHTML = d.alerts.map(function (a) { return '⚠ ' + esc(a.message); }).join('<br>'); }
+    else ab.className = '';
+    q('tick').textContent = 'tick ' + d.tick + ' · ' + new Date(d.ts * 1000).toLocaleTimeString();
+  }
+
+  function connect() {
+    var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    var ws = new WebSocket(proto + location.host + '/ws' + tok());
+    ws.onopen = function () { dot.className = 'dot on'; sub.textContent = 'live · ' + location.host; };
+    ws.onmessage = function (ev) { try { render(JSON.parse(ev.data)); } catch (e) {} };
+    ws.onclose = function () { dot.className = 'dot'; sub.textContent = 'disconnected — retrying in 2 s'; setTimeout(connect, 2000); };
+    ws.onerror = function () { ws.close(); };
+  }
+  connect();
+
+  // ---------------- AI chat ----------------
+  var drawer = q('drawer'), chatlog = q('chatlog'), chatq = q('chatq'), sendbtn = q('sendbtn');
+  window.toggleDrawer = function () { drawer.classList.toggle('open'); if (drawer.classList.contains('open')) chatq.focus(); };
+  function addMsg(cls, text) {
+    var m = document.createElement('div');
+    m.className = 'msg ' + cls;
+    m.textContent = text;
+    chatlog.appendChild(m);
+    chatlog.scrollTop = chatlog.scrollHeight;
+    return m;
+  }
+  function flash(id) {
+    var el = q(id);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.classList.add('flash');
+    setTimeout(function () { el.classList.remove('flash'); }, 1600);
+  }
+  function applyActions(list) {
+    (list || []).forEach(function (a) {
+      switch (a.action) {
+        case 'switch_tab':
+          if (a.tab === 'netlog' || a.tab === 'network') { flash('s-conns'); addMsg('act', '→ jumped to connections'); }
+          else if (a.tab === 'disk') { flash('c-cpu'); addMsg('act', '→ disk view is TUI-only; showing dashboard cards'); }
+          else { flash('s-procs'); addMsg('act', '→ jumped to processes'); }
+          break;
+        case 'search':
+        case 'filter':
+          if (a.section === 'connections' || (!a.section && a.query)) filters.connections = a.query || '';
+          else if (a.section === 'bandwidth') filters.bandwidth = a.query || '';
+          else filters.processes = a.query || '';
+          if (lastData) render(lastData);
+          addMsg('act', '→ filter applied: "' + (a.query || '') + '"');
+          break;
+        case 'clear_search':
+          filters = { processes: '', connections: '', bandwidth: '' };
+          if (lastData) render(lastData);
+          addMsg('act', '→ filters cleared');
+          break;
+        case 'sysinfo': case 'main': window.scrollTo({ top: 0, behavior: 'smooth' }); break;
+        default:
+          addMsg('act', '→ "' + a.action + '" applies to the TUI/app — noted');
+      }
+    });
+  }
+  window.sendChat = function () {
+    var question = chatq.value.trim();
+    if (!question || sendbtn.disabled) return;
+    chatq.value = '';
+    addMsg('you', question);
+    sendbtn.disabled = true;
+    var thinking = addMsg('ai', 'thinking…');
+    fetch('/api/chat' + tok(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: question })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      thinking.remove();
+      if (d.error) addMsg('err', d.error);
+      else { addMsg('ai', d.reply || '(empty reply)'); applyActions(d.actions); }
+    }).catch(function (e) {
+      thinking.remove();
+      addMsg('err', 'request failed: ' + e);
+    }).finally(function () { sendbtn.disabled = false; chatq.focus(); });
+  };
+  // reflect server-side AI availability on the button
+  fetch('/api/health' + tok()).then(function (r) { return r.json(); }).then(function (d) {
+    var btn = q('aibtn');
+    if (d.ai && d.ai.provider) { q('chatitle').textContent = d.ai.provider; }
+    else { btn.classList.add('off'); btn.textContent = '✦ AI (not configured)'; }
+  }).catch(function () {});
+  if (/[?&]chat=1/.test(location.search)) drawer.classList.add('open');
+  addMsg('ai', 'Hi — ask me anything about this Mac: what is using CPU or network, whether anything looks wrong, or say things like "filter the process list to Safari".');
+})();
+</script>
+</body>
+</html>
