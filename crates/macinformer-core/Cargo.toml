@@ -2,7 +2,11 @@
 name = "macinformer-core"
 version = "0.1.0"
 edition = "2021"
+description = "Data model and OS collectors for MacInformer (zero external dependencies)"
 license = "MIT"
-description = "Zero-dependency macOS system-information core (libproc/Mach/IOKit FFI)"
+
+[lib]
+name = "macinformer_core"
+path = "src/lib.rs"
 
 [dependencies]

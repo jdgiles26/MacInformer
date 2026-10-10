@@ -59,27 +59,36 @@ impl Default for AlertConfig {
             memory_percent: 90.0,
             disk_free_percent: 5.0,
             temp_c: 95.0,
-            battery_percent: 15.0,
+            battery_percent: 10.0,
             watch_processes: Vec::new(),
         }
     }
 }
 
-/// Evaluate every rule against the current snapshot. Pure: no side effects,
-/// returns the full set of *currently violated* conditions (the tracker
-/// below decides when to *raise*).
-pub fn evaluate(cfg: &AlertConfig, snap: &Snapshot, sensors: &SensorInfo, battery: &BatteryInfo) -> Vec<Alert> {
-    if !cfg.enabled {
-        return Vec::new();
-    }
+/// Evaluate all rules against one snapshot. Pure — no I/O.
+pub fn evaluate(
+    cfg: &AlertConfig,
+    snap: &Snapshot,
+    sensors: &SensorInfo,
+    battery: &BatteryInfo,
+) -> Vec<Alert> {
     let mut out = Vec::new();
+    if !cfg.enabled {
+        return out;
+    }
     if snap.cpu.total as f64 >= cfg.cpu_percent {
-        out.push(Alert { kind: AlertKind::Cpu, message: format!("CPU at {:.0}% (≥ {:.0}%)", snap.cpu.total, cfg.cpu_percent) });
+        out.push(Alert {
+            kind: AlertKind::Cpu,
+            message: format!("CPU usage {:.0}% ≥ {:.0}%", snap.cpu.total, cfg.cpu_percent),
+        });
     }
     if snap.memory.total > 0 {
         let pct = snap.memory.used as f64 / snap.memory.total as f64 * 100.0;
         if pct >= cfg.memory_percent {
-            out.push(Alert { kind: AlertKind::Memory, message: format!("Memory at {pct:.0}% (≥ {:.0}%)", cfg.memory_percent) });
+            out.push(Alert {
+                kind: AlertKind::Memory,
+                message: format!("Memory {pct:.0}% used ≥ {:.0}%", cfg.memory_percent),
+            });
         }
     }
     for d in &snap.disks {
@@ -88,46 +97,81 @@ pub fn evaluate(cfg: &AlertConfig, snap: &Snapshot, sensors: &SensorInfo, batter
             if free_pct <= cfg.disk_free_percent {
                 out.push(Alert {
                     kind: AlertKind::DiskFull,
-                    message: format!("{} nearly full: {:.1}% free (≤ {:.0}%)", d.name, free_pct, cfg.disk_free_percent),
+                    message: format!(
+                        "Disk {} ({}) {:.1}% free ≤ {:.0}%",
+                        d.name, d.mount, free_pct, cfg.disk_free_percent
+                    ),
                 });
             }
         }
     }
-    if let Some(t) = sensors.cpu_temp_c {
-        if t >= cfg.temp_c {
-            out.push(Alert { kind: AlertKind::Temperature, message: format!("CPU temperature {t:.0}°C (≥ {:.0}°C)", cfg.temp_c) });
+    for (label, t) in [
+        ("CPU", sensors.soc_max_c.or(sensors.cpu_temp_c)),
+        ("GPU", sensors.gpu_temp_c),
+        ("SSD", sensors.ssd_temp_c),
+    ] {
+        if let Some(t) = t {
+            if t >= cfg.temp_c {
+                out.push(Alert {
+                    kind: AlertKind::Temperature,
+                    message: format!("{label} temperature {t:.0}°C ≥ {:.0}°C", cfg.temp_c),
+                });
+            }
         }
-    }
-    if battery.present && !battery.charging && !battery.on_ac && battery.percent <= cfg.battery_percent {
-        out.push(Alert { kind: AlertKind::BatteryLow, message: format!("Battery at {:.0}% (≤ {:.0}%)", battery.percent, cfg.battery_percent) });
     }
     for name in &cfg.watch_processes {
-        if !snap.processes.iter().any(|p| !p.is_dead && p.name.eq_ignore_ascii_case(name)) {
-            out.push(Alert { kind: AlertKind::ProcessGone, message: format!("'{name}' is not running") });
+        if !name.is_empty()
+            && !snap
+                .processes
+                .iter()
+                .any(|p| !p.is_dead && p.name.contains(name.as_str()))
+        {
+            out.push(Alert {
+                kind: AlertKind::ProcessGone,
+                message: format!("Process '{name}' is not running"),
+            });
         }
+    }
+    if battery.present
+        && !battery.on_ac
+        && !battery.charging
+        && battery.percent <= cfg.battery_percent
+    {
+        out.push(Alert {
+            kind: AlertKind::BatteryLow,
+            message: format!(
+                "Battery {:.0}% ≤ {:.0}% (not charging)",
+                battery.percent, cfg.battery_percent
+            ),
+        });
     }
     out
 }
 
-/// Raise-once semantics: a condition alerts when it *appears*, then stays
-/// quiet until it clears and re-appears (like SI's notification model).
+/// Tracks which alerts are currently raised so each fires *once* when it
+/// starts (and clears when the condition goes away) — no notification spam.
 #[derive(Default)]
 pub struct AlertTracker {
-    active: Vec<String>,
-    raised: u32,
+    raised: std::collections::HashSet<String>,
 }
 
 impl AlertTracker {
-    /// Returns the messages of *newly raised* alerts this tick.
+    /// Feed current alerts; returns messages that are newly raised this tick.
     pub fn update(&mut self, current: &[Alert]) -> Vec<String> {
-        let now: Vec<String> = current.iter().map(|a| a.message.clone()).collect();
-        let new: Vec<String> = now.iter().filter(|m| !self.active.contains(m)).cloned().collect();
-        self.raised += new.len() as u32;
-        self.active = now;
-        new
+        let now: std::collections::HashSet<String> =
+            current.iter().map(|a| a.message.clone()).collect();
+        let mut fresh: Vec<String> = now
+            .iter()
+            .filter(|m| !self.raised.contains(*m))
+            .cloned()
+            .collect();
+        fresh.sort();
+        self.raised = now;
+        fresh
     }
+
     pub fn raised_count(&self) -> usize {
-        self.raised as usize
+        self.raised.len()
     }
 }
 
@@ -136,58 +180,121 @@ mod tests {
     use super::*;
     use crate::types::*;
 
-    fn snap_with(cpu: f32, mem_used: u64, mem_total: u64) -> Snapshot {
-        let mut s = Snapshot::default();
-        s.cpu.total = cpu;
-        s.memory.used = mem_used;
-        s.memory.total = mem_total;
-        s
+    fn snap() -> Snapshot {
+        Snapshot {
+            cpu: CpuInfo {
+                total: 95.0,
+                ..Default::default()
+            },
+            memory: MemoryInfo {
+                total: 100,
+                used: 95,
+                ..Default::default()
+            },
+            disks: vec![DiskInfo {
+                name: "disk3".into(),
+                mount: "/".into(),
+                vol_total: 100,
+                vol_free: 4,
+                ..Default::default()
+            }],
+            processes: vec![ProcessInfo {
+                name: "helperd".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
     }
 
     #[test]
-    fn cpu_and_memory_rules() {
+    fn fires_each_rule() {
+        let cfg = AlertConfig {
+            watch_processes: vec!["missingd".into()],
+            ..Default::default()
+        };
+        let sens = SensorInfo {
+            cpu_temp_c: Some(99.0),
+            ..Default::default()
+        };
+        let bat = BatteryInfo {
+            present: true,
+            percent: 8.0,
+            ..Default::default()
+        };
+        let alerts = evaluate(&cfg, &snap(), &sens, &bat);
+        let kinds: Vec<AlertKind> = alerts.iter().map(|a| a.kind).collect();
+        for k in [
+            AlertKind::Cpu,
+            AlertKind::Memory,
+            AlertKind::DiskFull,
+            AlertKind::Temperature,
+            AlertKind::ProcessGone,
+            AlertKind::BatteryLow,
+        ] {
+            assert!(kinds.contains(&k), "missing {k:?} in {alerts:?}");
+        }
+    }
+
+    #[test]
+    fn quiet_when_healthy() {
+        let mut s = snap();
+        s.cpu.total = 10.0;
+        s.memory.used = 10;
+        s.disks[0].vol_free = 60;
         let cfg = AlertConfig::default();
-        let s = snap_with(95.0, 15, 16);
         let alerts = evaluate(&cfg, &s, &SensorInfo::default(), &BatteryInfo::default());
-        assert!(alerts.iter().any(|a| a.kind == AlertKind::Cpu));
-        assert!(alerts.iter().any(|a| a.kind == AlertKind::Memory));
-        let ok = snap_with(10.0, 4, 16);
-        assert!(evaluate(&cfg, &ok, &SensorInfo::default(), &BatteryInfo::default()).is_empty());
+        assert!(alerts.is_empty(), "{alerts:?}");
     }
 
     #[test]
-    fn disabled_means_silent() {
-        let cfg = AlertConfig { enabled: false, ..Default::default() };
-        let s = snap_with(99.0, 15, 16);
-        assert!(evaluate(&cfg, &s, &SensorInfo::default(), &BatteryInfo::default()).is_empty());
+    fn disabled_is_silent() {
+        let cfg = AlertConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        assert!(evaluate(
+            &cfg,
+            &snap(),
+            &SensorInfo {
+                cpu_temp_c: Some(200.0),
+                ..Default::default()
+            },
+            &BatteryInfo::default()
+        )
+        .is_empty());
     }
 
     #[test]
-    fn battery_only_when_discharging() {
-        let cfg = AlertConfig::default();
-        let b = BatteryInfo { present: true, charging: true, percent: 5.0, ..Default::default() };
-        assert!(evaluate(&cfg, &Snapshot::default(), &SensorInfo::default(), &b).is_empty());
-        let b2 = BatteryInfo { present: true, charging: false, on_ac: false, percent: 5.0, ..Default::default() };
-        assert!(evaluate(&cfg, &Snapshot::default(), &SensorInfo::default(), &b2).iter().any(|a| a.kind == AlertKind::BatteryLow));
+    fn watched_process_present_is_quiet() {
+        let cfg = AlertConfig {
+            watch_processes: vec!["helper".into()],
+            ..Default::default()
+        };
+        let alerts = evaluate(
+            &cfg,
+            &Snapshot {
+                processes: vec![ProcessInfo {
+                    name: "helperd".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            &SensorInfo::default(),
+            &BatteryInfo::default(),
+        );
+        assert!(!alerts.iter().any(|a| a.kind == AlertKind::ProcessGone));
     }
 
     #[test]
-    fn watched_process_gone() {
-        let cfg = AlertConfig { watch_processes: vec!["Safari".into()], ..Default::default() };
-        let mut s = Snapshot::default();
-        s.processes.push(ProcessInfo { name: "Finder".into(), ..Default::default() });
-        assert!(evaluate(&cfg, &s, &SensorInfo::default(), &BatteryInfo::default()).iter().any(|a| a.kind == AlertKind::ProcessGone));
-        s.processes.push(ProcessInfo { name: "Safari".into(), ..Default::default() });
-        assert!(!evaluate(&cfg, &s, &SensorInfo::default(), &BatteryInfo::default()).iter().any(|a| a.kind == AlertKind::ProcessGone));
-    }
-
-    #[test]
-    fn tracker_raises_once_until_cleared() {
+    fn tracker_fires_once_then_clears() {
         let mut t = AlertTracker::default();
-        let a = vec![Alert { kind: AlertKind::Cpu, message: "CPU at 95%".into() }];
-        assert_eq!(t.update(&a).len(), 1); // raises
-        assert!(t.update(&a).is_empty()); // still hot — quiet
-        assert!(t.update(&[]).is_empty()); // cleared — quiet
-        assert_eq!(t.update(&a).len(), 1); // re-raises
+        let a = vec![Alert {
+            kind: AlertKind::Cpu,
+            message: "CPU hot".into(),
+        }];
+        assert_eq!(t.update(&a), vec!["CPU hot".to_string()]);
+        assert!(t.update(&a).is_empty()); // still raised → no repeat
+        assert!(t.update(&[]).is_empty()); // cleared
+        assert_eq!(t.update(&a), vec!["CPU hot".to_string()]); // re-raised
     }
 }
